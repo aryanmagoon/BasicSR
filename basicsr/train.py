@@ -89,20 +89,25 @@ def load_resume_state(opt):
     return resume_state
 
 def factorize_layer(num_layer, model):
+    model.cpu()
     for name, param in model.named_parameters():
         if name[:4] != 'body':
             continue
         if(name[-4:] == 'bias'):
-            continue
-        if name[6] != str(num_layer):
-            continue
+          continue
         weights = param.data
         unfold = tl.base.unfold(weights, 0)
         _, diag, _, _ = EVBMF(unfold.cpu())
         body, layer, currblock, numconv, _ = name.split('.')
+        if layer != str(num_layer):
+            continue
         conv_layer = getattr(getattr(model._modules[body][int(layer)], str(currblock)), str(numconv))
         decomposed_layer = tltorch.factorized_layers.FactorizedConv.from_conv(conv_layer, rank = diag.shape[0], implementation = 'factorized', factorization = 'cp')
         setattr(getattr(model._modules[body][int(layer)], str(currblock)), str(numconv), decomposed_layer)
+    model.cuda()
+def save_model_architecture(model, filename):
+    with open(filename, 'w') as f:
+        f.write(str(model))
 def train_pipeline(root_path):
     # parse options, set distributed setting, set random seed
     opt, args = parse_options(root_path, is_train=True)
@@ -137,6 +142,7 @@ def train_pipeline(root_path):
 
     # create model
     model = build_model(opt)
+    factorize_layer(0, model.net_g)
     if resume_state:  # resume training
         model.resume_training(resume_state)  # handle optimizers and schedulers
         logger.info(f"Resuming training from epoch: {resume_state['epoch']}, iter: {resume_state['iter']}.")
@@ -166,10 +172,18 @@ def train_pipeline(root_path):
     data_timer, iter_timer = AvgTimer(), AvgTimer()
     start_time = time.time()
 
+    currlayer=1
+    iternow = 0
+
     for epoch in range(start_epoch, total_epochs + 1):
         train_sampler.set_epoch(epoch)
         prefetcher.reset()
         train_data = prefetcher.next()
+        iternow +=1
+        if iternow % 3 ==0:
+            factorize_layer(currlayer, model.net_g)
+            currlayer+=1
+            save_model_architecture(model.net_g, 'factorized_rrdb_'+str(currlayer))
 
         while train_data is not None:
             data_timer.record()
