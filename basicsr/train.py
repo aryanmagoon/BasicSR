@@ -14,6 +14,9 @@ from basicsr.utils import (AvgTimer, MessageLogger, check_resume, get_env_info, 
                            init_tb_logger, init_wandb_logger, make_exp_dirs, mkdir_and_rename, scandir)
 from basicsr.utils.options import copy_opt_file, dict2str, parse_options
 
+import tensorly as tl
+import tltorch
+
 
 def init_tb_loggers(opt):
     # initialize wandb logger before tensorboard logger to allow proper sync
@@ -88,7 +91,7 @@ def load_resume_state(opt):
         check_resume(opt, resume_state['iter'])
     return resume_state
 
-def factorize_layer(num_layer, model):
+def factorize_layer(num_layer, model, model_ema):
     model.cpu()
     for name, param in model.named_parameters():
         vals = name.split('.')
@@ -102,8 +105,11 @@ def factorize_layer(num_layer, model):
         unfold = tl.base.unfold(weights, 0)
         _, diag, _, _ = EVBMF(unfold.cpu())
         conv_layer = getattr(getattr(model._modules[vals[0]][int(vals[1])], str(vals[2])), str(vals[3]))
+        conv_layer_ema = getattr(getattr(model_ema._modules[vals[0]][int(vals[1])], str(vals[2])), str(vals[3]))
         decomposed_layer = tltorch.factorized_layers.FactorizedConv.from_conv(conv_layer, rank = diag.shape[0], implementation = 'factorized', factorization = 'cp')
+        decomposed_layer_ema = tltorch.factorized_layers.FactorizedConv.from_conv(conv_layer_ema, rank = diag.shape[0], implementation = 'factorized', factorization = 'cp')
         setattr(getattr(model._modules[vals[0]][int(vals[1])], str(vals[2])), str(vals[3]), decomposed_layer)
+        setattr(getattr(model_ema._modules[vals[0]][int(vals[1])], str(vals[2])), str(vals[3]), decomposed_layer_ema)
     model.cuda()
 def save_model_architecture(model, filename):
     with open(filename, 'w') as f:
@@ -142,7 +148,8 @@ def train_pipeline(root_path):
 
     # create model
     model = build_model(opt)
-    factorize_layer(0, model.net_g)
+    factorize_layer(0, model.net_g, model.net_g_ema)
+
     if resume_state:  # resume training
         model.resume_training(resume_state)  # handle optimizers and schedulers
         logger.info(f"Resuming training from epoch: {resume_state['epoch']}, iter: {resume_state['iter']}.")
@@ -182,7 +189,7 @@ def train_pipeline(root_path):
         iternow +=1
         if iternow % 8 ==0:
             if currlayer <= 22:
-                factorize_layer(currlayer, model.net_g)
+                factorize_layer(currlayer, model.net_g, model.net_g_ema)
                 currlayer+=1
 
         while train_data is not None:
