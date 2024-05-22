@@ -91,19 +91,19 @@ def load_resume_state(opt):
 def factorize_layer(num_layer, model):
     model.cpu()
     for name, param in model.named_parameters():
-        if name[:4] != 'body':
+        vals = name.split('.')
+        if vals[0] != 'body':
             continue
-        if(name[-4:] == 'bias'):
-          continue
+        if(vals[-1] == 'bias'):
+            continue
+        if vals[1] != str(num_layer):
+            continue
         weights = param.data
         unfold = tl.base.unfold(weights, 0)
         _, diag, _, _ = EVBMF(unfold.cpu())
-        body, layer, currblock, numconv, _ = name.split('.')
-        if layer != str(num_layer):
-            continue
-        conv_layer = getattr(getattr(model._modules[body][int(layer)], str(currblock)), str(numconv))
+        conv_layer = getattr(getattr(model._modules[vals[0]][int(vals[1])], str(vals[2])), str(vals[3]))
         decomposed_layer = tltorch.factorized_layers.FactorizedConv.from_conv(conv_layer, rank = diag.shape[0], implementation = 'factorized', factorization = 'cp')
-        setattr(getattr(model._modules[body][int(layer)], str(currblock)), str(numconv), decomposed_layer)
+        setattr(getattr(model._modules[vals[0]][int(vals[1])], str(vals[2])), str(vals[3]), decomposed_layer)
     model.cuda()
 def save_model_architecture(model, filename):
     with open(filename, 'w') as f:
