@@ -9,6 +9,7 @@ from basicsr.data import build_dataloader, build_dataset
 from basicsr.data.data_sampler import EnlargedSampler
 from basicsr.data.prefetch_dataloader import CPUPrefetcher, CUDAPrefetcher
 from basicsr.models import build_model
+from basicsr.utils import EVBMF
 from basicsr.utils import (AvgTimer, MessageLogger, check_resume, get_env_info, get_root_logger, get_time_str,
                            init_tb_logger, init_wandb_logger, make_exp_dirs, mkdir_and_rename, scandir)
 from basicsr.utils.options import copy_opt_file, dict2str, parse_options
@@ -87,7 +88,21 @@ def load_resume_state(opt):
         check_resume(opt, resume_state['iter'])
     return resume_state
 
-
+def factorize_layer(num_layer, model):
+    for name, param in model.named_parameters():
+        if name[:4] != 'body':
+            continue
+        if(name[-4:] == 'bias'):
+            continue
+        if name[6] != str(num_layer):
+            continue
+        weights = param.data
+        unfold = tl.base.unfold(weights, 0)
+        _, diag, _, _ = EVBMF(unfold.cpu())
+        body, layer, currblock, numconv, _ = name.split('.')
+        conv_layer = getattr(getattr(model._modules[body][int(layer)], str(currblock)), str(numconv))
+        decomposed_layer = tltorch.factorized_layers.FactorizedConv.from_conv(conv_layer, rank = diag.shape[0], implementation = 'factorized', factorization = 'cp')
+        setattr(getattr(model._modules[body][int(layer)], str(currblock)), str(numconv), decomposed_layer)
 def train_pipeline(root_path):
     # parse options, set distributed setting, set random seed
     opt, args = parse_options(root_path, is_train=True)
