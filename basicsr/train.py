@@ -180,10 +180,10 @@ def train_pipeline(root_path):
         prefetcher.reset()
         train_data = prefetcher.next()
         iternow +=1
-        if iternow % 3 ==0:
-            factorize_layer(currlayer, model.net_g)
-            currlayer+=1
-            save_model_architecture(model.net_g, 'factorized_rrdb_'+str(currlayer))
+        if iternow % 8 ==0:
+            if currlayer <= 22:
+                factorize_layer(currlayer, model.net_g)
+                currlayer+=1
 
         while train_data is not None:
             data_timer.record()
@@ -232,6 +232,7 @@ def train_pipeline(root_path):
     logger.info(f'End of training. Time consumed: {consumed_time}')
     logger.info('Save the latest model.')
     model.save(epoch=-1, current_iter=-1)  # -1 stands for the latest
+    save_model_architecture(model.net_g, 'factorized_rrdb_'+str(currlayer))
     if opt.get('val') is not None:
         for val_loader in val_loaders:
             model.validation(val_loader, current_iter, tb_logger, opt['val']['save_img'])

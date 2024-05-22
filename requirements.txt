@@ -14,4 +14,4 @@ torchvision
 tqdm
 yapf
 tensorly
-tltorch
+tensorly-torch
